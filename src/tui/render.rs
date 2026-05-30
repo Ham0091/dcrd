@@ -160,7 +160,7 @@ fn render_input_area(area: Rect, app: &TuiApp, frame: &mut ratatui::Frame) {
 
     // Show cursor in insert mode
     if app.mode == InputMode::Insert {
-        let cursor_x = inner.x + 2 + 11 + app.cursor as u16; // "> " + "[INSERT] " + cursor pos
+        let cursor_x = inner.x + 2 + 10 + app.cursor as u16; // "> " + "[INSERT]" + cursor pos
         let cursor_x = cursor_x.min(inner.x + inner.width.saturating_sub(1));
         frame.set_cursor_position((cursor_x, inner.y));
     }

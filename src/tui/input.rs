@@ -369,11 +369,8 @@ async fn switch_channel_by_offset(
             .position(|c| c.id == ccid)
             .unwrap_or(0);
 
-        let new_idx = if offset < 0 {
-            current_idx.wrapping_sub((-offset) as usize) % channels.len()
-        } else {
-            (current_idx + offset as usize) % channels.len()
-        };
+        let len = channels.len();
+        let new_idx = ((current_idx as isize + offset as isize).rem_euclid(len as isize)) as usize;
 
         let new_channel = &channels[new_idx];
         *state.current_channel_id.write().await = Some(new_channel.id);

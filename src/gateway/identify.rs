@@ -3,14 +3,14 @@ use tokio_tungstenite::tungstenite::Message;
 
 /// Build the IDENTIFY payload (op 2) with minimal intents.
 ///
-/// Intents 3072 = GUILD_MESSAGES (1 << 9) + GUILD_VOICE_STATES (1 << 7).
+/// Intents 641 = GUILDS (1 << 0) + GUILD_VOICE_STATES (1 << 7) + GUILD_MESSAGES (1 << 9).
 /// We request ONLY the intents we need to minimize gateway traffic.
 pub fn build_identify(token: &str) -> Message {
     let payload = json!({
         "op": 2,
         "d": {
             "token": token,
-            "intents": 3072,
+            "intents": 641,
             "properties": {
                 "os": "windows",
                 "browser": "dcrd",

@@ -36,8 +36,9 @@ pub fn render_voice_bar(area: Rect, state: &AppState, frame: &mut ratatui::Frame
             let muted = if voice.muted { "🔇" } else { "🔊" };
             let deafened = if voice.deafened { "🔕" } else { "🔔" };
 
-            // Get voice users
-            let users = state.get_voice_user_names();
+            // Get voice users for the current guild only
+            let guild_id = voice.guild_id.unwrap_or(0);
+            let users = state.get_voice_user_names_for_guild(guild_id);
             let user_list = if users.is_empty() {
                 String::from("none")
             } else {

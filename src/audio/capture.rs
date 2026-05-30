@@ -1,4 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tracing::{error, info};
 
 use super::buffer::AudioBuffer;
@@ -8,8 +10,8 @@ use super::buffer::AudioBuffer;
 /// Captured samples are pushed into the provided ring buffer.
 /// This function blocks and should be run on a dedicated thread.
 ///
-/// Returns only on error or when the stream is dropped.
-pub fn run_capture(buffer: AudioBuffer) -> anyhow::Result<()> {
+/// Returns when `stop` flag is set to true, or on stream error.
+pub fn run_capture(buffer: AudioBuffer, stop: Arc<AtomicBool>) -> anyhow::Result<()> {
     let host = cpal::default_host();
 
     let device = host
@@ -50,10 +52,12 @@ pub fn run_capture(buffer: AudioBuffer) -> anyhow::Result<()> {
     info!("Audio capture started (48kHz mono 16-bit)");
 
     // Keep the thread alive while the stream is active.
-    // The stream will be dropped when this function returns.
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        // Check if the stream is still alive by trying to do something
-        // The stream callback runs in the background
+    // Check the stop flag periodically so we can exit cleanly.
+    while !stop.load(Ordering::Relaxed) {
+        std::thread::sleep(std::time::Duration::from_millis(500));
     }
+
+    info!("Audio capture stopping");
+    // stream is dropped here, which stops the audio capture
+    Ok(())
 }

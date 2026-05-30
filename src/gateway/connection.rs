@@ -179,6 +179,10 @@ async fn connect_and_run(
                         let mut voice = state.voice_state.write().await;
                         if voice.connected {
                             voice.deafened = !voice.deafened;
+                            // Discord requires self_mute=true when self_deaf=true
+                            if voice.deafened {
+                                voice.muted = true;
+                            }
                             let deaf = voice.deafened;
                             let muted = voice.muted;
                             let guild_id = voice.guild_id.unwrap_or(0);

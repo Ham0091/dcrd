@@ -1,6 +1,7 @@
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -177,33 +178,8 @@ pub async fn connect_voice(
         voice.guild_id = Some(guild_id);
     }
 
-    // ── Voice Gateway Heartbeat Task ────────────────────────────────────
-    // We need to send heartbeats to the voice gateway
-    let (hb_stop_tx, mut hb_stop_rx) = tokio::sync::oneshot::channel::<()>();
-    let hb_interval_dur = Duration::from_millis(hb_interval * 3 / 4); // slightly faster than required
-    tokio::spawn(async move {
-        let mut ticker = interval(hb_interval_dur);
-        ticker.tick().await; // skip first
-        let mut seq: u64 = 0;
-        loop {
-            tokio::select! {
-                _ = ticker.tick() => {
-                    let _hb = json!({"op": 3, "d": seq});
-                    // We can't easily share ws_write, so we'll handle heartbeats differently
-                    // For now, the main loop will handle heartbeats
-                    seq += 1;
-                }
-                _ = &mut hb_stop_rx => {
-                    break;
-                }
-            }
-        }
-    });
-
     // ── Audio Streaming Loop ────────────────────────────────────────────
-    let result = audio_loop(&state, ws_write, ws_read, udp, cipher, ssrc, hb_interval).await;
-
-    let _ = hb_stop_tx.send(());
+    let result = audio_loop(&state, ws_write, ws_read, udp, &cipher, ssrc, hb_interval).await;
 
     // Update voice state on disconnect
     {
@@ -231,7 +207,7 @@ async fn audio_loop<SRead>(
     >,
     mut ws_read: SRead,
     mut udp: VoiceUdp,
-    cipher: VoiceCipher,
+    cipher: &VoiceCipher,
     _ssrc: u32,
     hb_interval_ms: u64,
 ) -> anyhow::Result<()>
@@ -255,25 +231,26 @@ where
         }
     };
 
-    // Audio capture/playback setup (deferred to audio module)
-    // For now, we'll use a simple approach: capture from mic, encode, send
-    // and receive, decode, play
-
     let mic_buffer = Arc::new(crossbeam_queue::ArrayQueue::<i16>::new(FRAME_SIZE * 4));
     let spk_buffer = Arc::new(crossbeam_queue::ArrayQueue::<i16>::new(FRAME_SIZE * 4));
 
+    // Stop flag for audio threads
+    let stop_flag = Arc::new(AtomicBool::new(false));
+
     // Spawn audio capture thread
     let mic_buf = mic_buffer.clone();
+    let capture_stop = stop_flag.clone();
     let capture_handle = std::thread::spawn(move || {
-        if let Err(e) = crate::audio::capture::run_capture(mic_buf) {
+        if let Err(e) = crate::audio::capture::run_capture(mic_buf, capture_stop) {
             error!("Audio capture error: {}", e);
         }
     });
 
     // Spawn audio playback thread
     let spk_buf = spk_buffer.clone();
+    let playback_stop = stop_flag.clone();
     let playback_handle = std::thread::spawn(move || {
-        if let Err(e) = crate::audio::playback::run_playback(spk_buf) {
+        if let Err(e) = crate::audio::playback::run_playback(spk_buf, playback_stop) {
             error!("Audio playback error: {}", e);
         }
     });
@@ -339,33 +316,29 @@ where
                 let is_muted = voice.muted || voice.deafened;
                 drop(voice);
 
-                // Fill send buffer from mic
+                // Fill send buffer from mic (drop excess samples if buffer full)
                 while let Some(sample) = mic_buffer.pop() {
                     if send_buf_pos < FRAME_SIZE {
                         send_buf[send_buf_pos] = sample;
                         send_buf_pos += 1;
+                    } else {
+                        break; // Don't keep popping samples we can't store
                     }
                 }
 
                 // When we have a full frame, encode and send
                 if send_buf_pos >= FRAME_SIZE {
                     let frame = if is_muted {
-                        &silence
+                        silence.as_slice()
                     } else {
                         &send_buf[..FRAME_SIZE]
                     };
 
                     match encoder.encode(frame) {
                         Ok(opus_packet) => {
-                            // Encrypt
-                            let _header = [0u8; 12]; // Will be set by UDP
-                            match cipher.encrypt(&[0x80, 0x78, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], opus_packet) {
-                                Ok(encrypted) => {
-                                    if let Err(e) = udp.send_voice_packet(&encrypted).await {
-                                        debug!("Voice send error: {}", e);
-                                    }
-                                }
-                                Err(e) => debug!("Encrypt error: {}", e),
+                            // Encrypt with the correct RTP header as nonce and send
+                            if let Err(e) = udp.send_encrypted_voice_packet(cipher, opus_packet).await {
+                                debug!("Voice send error: {}", e);
                             }
                         }
                         Err(e) => debug!("Encode error: {}", e),
@@ -400,9 +373,14 @@ where
         }
     }
 
-    // Cleanup
-    capture_handle.join().ok();
-    playback_handle.join().ok();
+    // Signal audio threads to stop, then join them
+    stop_flag.store(true, Ordering::Relaxed);
+    // Give threads time to notice the flag (they sleep 1s per iteration)
+    // Use a short timeout via spawn_blocking to avoid blocking the async runtime
+    let _ = tokio::task::spawn_blocking(move || {
+        capture_handle.join().ok();
+        playback_handle.join().ok();
+    }).await;
 
     Ok(())
 }
@@ -418,7 +396,7 @@ async fn recv_only_loop<SRead>(
     >,
     mut ws_read: SRead,
     udp: VoiceUdp,
-    cipher: VoiceCipher,
+    cipher: &VoiceCipher,
     hb_interval_ms: u64,
 ) -> anyhow::Result<()>
 where
@@ -427,9 +405,12 @@ where
     let mut decoder = OpusDecoder::new()?;
     let spk_buffer = Arc::new(crossbeam_queue::ArrayQueue::<i16>::new(FRAME_SIZE * 4));
 
+    let stop_flag = Arc::new(AtomicBool::new(false));
+
     let spk_buf = spk_buffer.clone();
+    let playback_stop = stop_flag.clone();
     let playback_handle = std::thread::spawn(move || {
-        if let Err(e) = crate::audio::playback::run_playback(spk_buf) {
+        if let Err(e) = crate::audio::playback::run_playback(spk_buf, playback_stop) {
             error!("Audio playback error: {}", e);
         }
     });
@@ -469,7 +450,10 @@ where
         }
     }
 
-    playback_handle.join().ok();
+    stop_flag.store(true, Ordering::Relaxed);
+    let _ = tokio::task::spawn_blocking(move || {
+        playback_handle.join().ok();
+    }).await;
     Ok(())
 }
 
@@ -484,7 +468,7 @@ async fn send_only_loop<SRead>(
     >,
     mut ws_read: SRead,
     mut udp: VoiceUdp,
-    cipher: VoiceCipher,
+    cipher: &VoiceCipher,
     encoder: &mut OpusEncoder,
     hb_interval_ms: u64,
 ) -> anyhow::Result<()>
@@ -492,9 +476,12 @@ where
     SRead: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
     let mic_buffer = Arc::new(crossbeam_queue::ArrayQueue::<i16>::new(FRAME_SIZE * 4));
+    let stop_flag = Arc::new(AtomicBool::new(false));
+
     let mic_buf = mic_buffer.clone();
+    let capture_stop = stop_flag.clone();
     let capture_handle = std::thread::spawn(move || {
-        if let Err(e) = crate::audio::capture::run_capture(mic_buf) {
+        if let Err(e) = crate::audio::capture::run_capture(mic_buf, capture_stop) {
             error!("Audio capture error: {}", e);
         }
     });
@@ -525,13 +512,15 @@ where
                     if send_buf_pos < FRAME_SIZE {
                         send_buf[send_buf_pos] = sample;
                         send_buf_pos += 1;
+                    } else {
+                        break;
                     }
                 }
                 if send_buf_pos >= FRAME_SIZE {
                     if let Ok(opus_packet) = encoder.encode(&send_buf[..FRAME_SIZE]) {
-                        let header = [0x80, 0x78, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-                        if let Ok(encrypted) = cipher.encrypt(&header, opus_packet) {
-                            udp.send_voice_packet(&encrypted).await.ok();
+                        // Encrypt with correct RTP header as nonce and send
+                        if let Err(e) = udp.send_encrypted_voice_packet(cipher, opus_packet).await {
+                            debug!("Voice send error: {}", e);
                         }
                     }
                     send_buf.copy_within(FRAME_SIZE..send_buf_pos, 0);
@@ -541,7 +530,10 @@ where
         }
     }
 
-    capture_handle.join().ok();
+    stop_flag.store(true, Ordering::Relaxed);
+    let _ = tokio::task::spawn_blocking(move || {
+        capture_handle.join().ok();
+    }).await;
     Ok(())
 }
 

@@ -2,6 +2,8 @@ use std::net::SocketAddr;
 use tokio::net::UdpSocket;
 use tracing::info;
 
+use super::encryption::VoiceCipher;
+
 /// UDP transport for Discord voice data.
 ///
 /// Handles:
@@ -78,15 +80,21 @@ impl VoiceUdp {
         Ok(IpDiscoveryResult { ip, port })
     }
 
-    /// Send an encrypted voice packet.
+    /// Encrypt and send a voice packet using the correct RTP header as nonce.
     ///
-    /// The packet format is:
-    /// [RTP header (12 bytes)] [encrypted Opus data] [Poly1305 tag (16 bytes)]
-    pub async fn send_voice_packet(&mut self, encrypted_payload: &[u8]) -> anyhow::Result<()> {
+    /// This builds the RTP header (with real seq/ts/ssrc), uses it for the
+    /// XSalsa20-Poly1305 nonce, encrypts the Opus packet, then sends
+    /// [header (12 bytes)] [encrypted data] [Poly1305 tag (16 bytes)].
+    pub async fn send_encrypted_voice_packet(
+        &mut self,
+        cipher: &VoiceCipher,
+        opus_packet: &[u8],
+    ) -> anyhow::Result<()> {
         let header = self.build_rtp_header();
-        let mut packet = Vec::with_capacity(12 + encrypted_payload.len());
+        let encrypted = cipher.encrypt(&header, opus_packet)?;
+        let mut packet = Vec::with_capacity(12 + encrypted.len());
         packet.extend_from_slice(&header);
-        packet.extend_from_slice(encrypted_payload);
+        packet.extend_from_slice(&encrypted);
 
         self.socket.send(&packet).await?;
 

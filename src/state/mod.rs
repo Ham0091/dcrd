@@ -171,11 +171,12 @@ impl AppState {
         })
     }
 
-    /// Get the current voice channel users as a sorted list of usernames.
-    pub fn get_voice_user_names(&self) -> Vec<String> {
+    /// Get voice channel users filtered by guild_id as a sorted list of usernames.
+    pub fn get_voice_user_names_for_guild(&self, guild_id: u64) -> Vec<String> {
         let mut names: Vec<String> = self
             .voice_users
             .iter()
+            .filter(|e| e.key().0 == guild_id)
             .map(|e| e.value().clone())
             .collect();
         names.sort();
