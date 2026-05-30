@@ -1,0 +1,57 @@
+[package]
+name = "dcrd"
+version = "0.1.0"
+edition = "2021"
+description = "Ultra-low-RAM Discord client — voice + text only"
+
+[dependencies]
+# Core async runtime (single-threaded)
+tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net", "io-util"] }
+
+# WebSocket for custom gateway + voice gateway
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+
+# Voice codec (Opus)
+opus = "0.3"
+
+# Audio I/O (WASAPI on Windows)
+cpal = "0.15"
+
+# Terminal UI
+ratatui = "0.28"
+crossterm = { version = "0.28", features = ["event-stream"] }
+
+# HTTP client (REST API)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Concurrent data structures
+dashmap = "6"
+crossbeam-queue = "0.3"
+
+# Voice encryption — pure Rust XSalsa20-Poly1305 (no native deps)
+crypto_secretbox = "0.1"
+
+# Utilities
+anyhow = "1"
+url = "2"
+
+# NOTE: serenity and songbird are omitted — we build a custom minimal
+# gateway handler and voice stack from scratch to minimize RAM usage.
+# This eliminates ~3.5 MB of dependencies that would otherwise be pulled in.
+# See ARCHITECTURE.md for the original dependency specification.
+
+[profile.release]
+opt-level = "z"        # Optimize for size (better cache locality → less RAM)
+lto = true             # Link-Time Optimization — eliminates dead code
+codegen-units = 1      # Single codegen unit — better optimization
+strip = true           # Strip debug symbols
+panic = "abort"        # No unwind tables (~100 KB savings)
