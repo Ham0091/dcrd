@@ -1,4 +1,7 @@
 /target
+/target/
+mingw64/
+mingw64.7z
 *.exe
 *.pdb
 $null
