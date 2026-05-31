@@ -101,8 +101,12 @@ async fn connect_and_run(
                             error!("Event error: {}", e);
                         }
                     }
-                    Some(Ok(Message::Close(_))) => {
-                        return Err(anyhow::anyhow!("WebSocket closed by server"));
+                    Some(Ok(Message::Close(close_frame))) => {
+                        let details = close_frame
+                            .as_ref()
+                            .map(|cf| format!("code={}, reason={}", cf.code, cf.reason))
+                            .unwrap_or_else(|| "no details".to_string());
+                        return Err(anyhow::anyhow!("WebSocket closed by server: {}", details));
                     }
                     Some(Err(e)) => {
                         return Err(anyhow::anyhow!("WebSocket error: {}", e));
