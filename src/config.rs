@@ -21,16 +21,20 @@ impl Config {
     ///   - `DCRD_GUILD_ID` — default guild to select
     ///   - `DCRD_CHANNEL_ID` — default channel to select
     pub fn load() -> anyhow::Result<Self> {
-        let token = env::var("DCRD_TOKEN").map_err(|_| {
-            anyhow::anyhow!(
-                "DCRD_TOKEN environment variable not set.\n\
-                 Set it with: set DCRD_TOKEN=your_bot_token_here"
-            )
-        })?;
+        let token = env::var("DCRD_TOKEN")
+            .map(|t| t.trim().to_string())
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "DCRD_TOKEN environment variable not set.\n\
+                     Set it with: set DCRD_TOKEN=your_bot_token_here"
+                )
+            })?;
 
         if token.is_empty() {
             return Err(anyhow::anyhow!("DCRD_TOKEN is empty"));
         }
+
+        tracing::info!("DCRD_TOKEN loaded (len={}, starts_with_MTU={})", token.len(), token.starts_with("MTU"));
 
         let default_guild_id = env::var("DCRD_GUILD_ID")
             .ok()

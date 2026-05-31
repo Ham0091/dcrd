@@ -1,11 +1,18 @@
 use serde_json::json;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::debug;
 
 /// Build the IDENTIFY payload (op 2) with minimal intents.
 ///
 /// Intents 641 = GUILDS (1 << 0) + GUILD_VOICE_STATES (1 << 7) + GUILD_MESSAGES (1 << 9).
 /// We request ONLY the intents we need to minimize gateway traffic.
 pub fn build_identify(token: &str) -> Message {
+    let masked = if token.len() > 10 {
+        format!("{}...{}", &token[..6], &token[token.len()-4..])
+    } else {
+        "***".to_string()
+    };
+    debug!("Building IDENTIFY with token prefix: {}", masked);
     let payload = json!({
         "op": 2,
         "d": {
