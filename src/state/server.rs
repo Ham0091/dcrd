@@ -3,6 +3,7 @@
 pub struct Guild {
     pub id: u64,
     pub name: String,
+    pub icon: Option<String>,
 }
 
 impl Guild {
@@ -14,6 +15,10 @@ impl Guild {
             .and_then(|n| n.as_str())
             .unwrap_or("Unknown Server")
             .to_string();
-        Some(Guild { id, name })
+        let icon = data
+            .get("icon")
+            .and_then(|i| i.as_str())
+            .map(|s| s.to_string());
+        Some(Guild { id, name, icon })
     }
 }

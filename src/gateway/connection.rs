@@ -110,7 +110,7 @@ async fn connect_and_run(
                         let s = v.get("s").and_then(|s| s.as_u64());
 
                         if let Err(e) = super::events::handle_event(
-                            op, d, t.as_deref(), s, state,
+                            op, d, t.as_deref(), s, state, rest,
                         ).await {
                             let msg = e.to_string();
                             if msg == "RECONNECT" || msg == "INVALID_SESSION" {

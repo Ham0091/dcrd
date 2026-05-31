@@ -2,6 +2,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+use crate::rest::api::RestClient;
 use crate::state::channel::Channel;
 use crate::state::message::Message as StateMessage;
 use crate::state::server::Guild;
@@ -17,6 +18,7 @@ pub async fn handle_event(
     event_name: Option<&str>,
     seq: Option<u64>,
     state: &Arc<AppState>,
+    rest: &Arc<RestClient>,
 ) -> anyhow::Result<()> {
     // Update sequence number for heartbeats/resumes
     if let Some(s) = seq {
@@ -26,7 +28,7 @@ pub async fn handle_event(
     }
 
     match op {
-        0 => handle_dispatch(data, event_name, state).await,
+        0 => handle_dispatch(data, event_name, state, rest).await,
         7 => {
             info!("Gateway RECONNECT requested");
             Err(anyhow::anyhow!("RECONNECT"))
@@ -58,6 +60,7 @@ async fn handle_dispatch(
     data: Option<Value>,
     event_name: Option<&str>,
     state: &Arc<AppState>,
+    rest: &Arc<RestClient>,
 ) -> anyhow::Result<()> {
     let data = match data {
         Some(d) => d,
@@ -65,7 +68,7 @@ async fn handle_dispatch(
     };
 
     match event_name {
-        Some("READY") => handle_ready(&data, state).await,
+        Some("READY") => handle_ready(&data, state, rest).await,
         Some("GUILD_CREATE") => handle_guild_create(&data, state).await,
         Some("CHANNEL_CREATE") => handle_channel_create(&data, state).await,
         Some("MESSAGE_CREATE") => handle_message_create(&data, state).await,
@@ -83,7 +86,7 @@ async fn handle_dispatch(
 
 // ─── READY ───────────────────────────────────────────────────────────────────
 
-async fn handle_ready(data: &Value, state: &Arc<AppState>) -> anyhow::Result<()> {
+async fn handle_ready(data: &Value, state: &Arc<AppState>, rest: &Arc<RestClient>) -> anyhow::Result<()> {
     info!("Gateway READY received");
 
     // Session ID
@@ -110,14 +113,15 @@ async fn handle_ready(data: &Value, state: &Arc<AppState>) -> anyhow::Result<()>
         }
     }
 
-    // Guilds (servers)
+    // Guilds (servers) — for user accounts, READY sends stubs with just {id, unavailable: true}.
+    // The full guild data (name, channels) comes via GUILD_CREATE events that follow.
+    // We parse what we can from the READY payload here.
     if let Some(guilds) = data.get("guilds").and_then(|g| g.as_array()) {
         for gd in guilds {
             if let Some(guild) = Guild::from_json(gd) {
-                info!("  Guild: {} (ID: {})", guild.name, guild.id);
                 state.guilds.insert(guild.id, guild);
 
-                // Channels inside the guild
+                // Channels inside the guild (may be present in READY for some accounts)
                 if let Some(channels) = gd.get("channels").and_then(|c| c.as_array()) {
                     for cd in channels {
                         if let Some(ch) = Channel::from_json(cd, gd["id"].as_str().unwrap_or("0").parse().unwrap_or(0)) {
@@ -128,6 +132,85 @@ async fn handle_ready(data: &Value, state: &Arc<AppState>) -> anyhow::Result<()>
             }
         }
     }
+
+    info!("  Guilds loaded from READY: {}", state.guilds.len());
+
+    // For user accounts, guild names are often missing from READY.
+    // Fetch them via REST API and also fetch channels.
+    let st = state.clone();
+    let rt = rest.clone();
+    tokio::spawn(async move {
+        // Collect guild IDs that need names
+        let guild_ids: Vec<u64> = st
+            .guilds
+            .iter()
+            .filter(|e| e.value().name == "Unknown Server")
+            .map(|e| *e.key())
+            .collect();
+
+        if guild_ids.is_empty() {
+            info!("All guild names known, skipping REST fetch");
+        } else {
+            info!("Fetching names for {} guilds via REST...", guild_ids.len());
+            for gid in guild_ids {
+                match rt.fetch_guild_info(gid).await {
+                    Ok(guild_data) => {
+                        let name = guild_data
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("Unknown Server")
+                            .to_string();
+                        let icon = guild_data
+                            .get("icon")
+                            .and_then(|i| i.as_str())
+                            .map(|s| s.to_string());
+
+                        info!("  Guild REST: {} (ID: {})", name, gid);
+                        st.guilds.insert(gid, Guild { id: gid, name, icon });
+
+                        // Also fetch channels for this guild if we don't have any
+                        let has_channels = st.channels.iter().any(|e| e.value().guild_id == gid);
+                        if !has_channels {
+                            if let Some(channels) = guild_data.get("channels").and_then(|c| c.as_array()) {
+                                for cd in channels {
+                                    if let Some(ch) = Channel::from_json(cd, gid) {
+                                        st.channels.insert(ch.id, ch);
+                                    }
+                                }
+                                info!("    Fetched {} channels for guild {}", st.channels.iter().filter(|e| e.value().guild_id == gid).count(), gid);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to fetch guild {} info: {}", gid, e);
+                    }
+                }
+                // Small delay to avoid rate limiting
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+
+        // Also try fetching guilds via /users/@me/guilds for any missing ones
+        match rt.fetch_my_guilds().await {
+            Ok(my_guilds) => {
+                for gd in &my_guilds {
+                    if let Some(gid) = gd.get("id").and_then(|i| i.as_str()).and_then(|s| s.parse::<u64>().ok()) {
+                        let name = gd.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown Server").to_string();
+                        if !st.guilds.contains_key(&gid) || st.guilds.get(&gid).map(|g| g.name.clone()) == Some("Unknown Server".to_string()) {
+                            let icon = gd.get("icon").and_then(|i| i.as_str()).map(|s| s.to_string());
+                            info!("  Guild @me: {} (ID: {})", name, gid);
+                            st.guilds.insert(gid, Guild { id: gid, name, icon });
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to fetch @me/guilds: {}", e);
+            }
+        }
+
+        info!("Guild name fetch complete. Total guilds: {}", st.guilds.len());
+    });
 
     // Auto-select first guild and first text channel
     let guild_ids: Vec<u64> = state.guilds.iter().map(|e| *e.key()).collect();
