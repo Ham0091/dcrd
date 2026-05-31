@@ -80,6 +80,31 @@ impl RestClient {
         Ok(body)
     }
 
+    /// Fetch channels for a guild (GET /guilds/{id}/channels).
+    pub async fn fetch_guild_channels(&self, guild_id: u64) -> anyhow::Result<Vec<Value>> {
+        let url = format!("{}/guilds/{}/channels", API_BASE, guild_id);
+        let resp = self
+            .client
+            .get(&url)
+            .header("Authorization", &self.token)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "Fetch guild channels failed ({}): {}",
+                status,
+                body
+            ));
+        }
+
+        let body: Vec<Value> = resp.json().await?;
+        debug!("Fetched {} channels for guild {}", body.len(), guild_id);
+        Ok(body)
+    }
+
     /// Fetch the user's guilds (GET /users/@me/guilds).
     pub async fn fetch_my_guilds(&self) -> anyhow::Result<Vec<Value>> {
         let url = format!("{}/users/@me/guilds", API_BASE);

@@ -377,9 +377,16 @@ async fn handle_srv_command(
                     channel_id: first_ch.id,
                 })
                 .await;
+            app.scroll_to_bottom();
+            app.set_status(format!("Switched to server: {}", gname));
+        } else {
+            // No channels loaded yet — fetch them via REST
+            *state.current_channel_id.write().await = None;
+            let _ = cmd_tx
+                .send(Command::FetchGuildChannels { guild_id: gid })
+                .await;
+            app.set_status(format!("Loading channels for {}...", gname));
         }
-        app.scroll_to_bottom();
-        app.set_status(format!("Switched to server: {}", gname));
     } else {
         app.set_status(format!("Server '{}' not found", name));
     }

@@ -20,6 +20,10 @@ pub enum Command {
     FetchMessages {
         channel_id: u64,
     },
+    /// Fetch channels for a guild (via REST).
+    FetchGuildChannels {
+        guild_id: u64,
+    },
     /// Update voice state (join/leave voice channel).
     VoiceStateUpdate {
         guild_id: u64,

@@ -168,16 +168,25 @@ async fn handle_ready(data: &Value, state: &Arc<AppState>, rest: &Arc<RestClient
                         info!("  Guild REST: {} (ID: {})", name, gid);
                         st.guilds.insert(gid, Guild { id: gid, name, icon });
 
-                        // Also fetch channels for this guild if we don't have any
+                        // Fetch channels for this guild via REST
                         let has_channels = st.channels.iter().any(|e| e.value().guild_id == gid);
                         if !has_channels {
-                            if let Some(channels) = guild_data.get("channels").and_then(|c| c.as_array()) {
-                                for cd in channels {
-                                    if let Some(ch) = Channel::from_json(cd, gid) {
-                                        st.channels.insert(ch.id, ch);
+                            match rt.fetch_guild_channels(gid).await {
+                                Ok(channels_data) => {
+                                    let mut count = 0;
+                                    for cd in &channels_data {
+                                        if let Some(ch) = Channel::from_json(cd, gid) {
+                                            st.channels.insert(ch.id, ch);
+                                            count += 1;
+                                        }
+                                    }
+                                    if count > 0 {
+                                        info!("    Fetched {} channels for guild {}", count, gid);
                                     }
                                 }
-                                info!("    Fetched {} channels for guild {}", st.channels.iter().filter(|e| e.value().guild_id == gid).count(), gid);
+                                Err(e) => {
+                                    warn!("    Failed to fetch channels for guild {}: {}", gid, e);
+                                }
                             }
                         }
                     }
@@ -209,7 +218,51 @@ async fn handle_ready(data: &Value, state: &Arc<AppState>, rest: &Arc<RestClient
             }
         }
 
-        info!("Guild name fetch complete. Total guilds: {}", st.guilds.len());
+        // Fetch channels for any guild that still has no text channels
+        let guild_ids_needing_channels: Vec<u64> = st
+            .guilds
+            .iter()
+            .filter(|e| {
+                !st.channels.iter().any(|ch| {
+                    ch.value().guild_id == *e.key()
+                        && ch.value().channel_type == crate::state::channel::ChannelType::Text
+                })
+            })
+            .map(|e| *e.key())
+            .collect();
+
+        if !guild_ids_needing_channels.is_empty() {
+            info!(
+                "Fetching channels for {} guilds...",
+                guild_ids_needing_channels.len()
+            );
+            for gid in guild_ids_needing_channels {
+                match rt.fetch_guild_channels(gid).await {
+                    Ok(channels_data) => {
+                        let mut count = 0;
+                        for cd in &channels_data {
+                            if let Some(ch) = Channel::from_json(cd, gid) {
+                                st.channels.insert(ch.id, ch);
+                                count += 1;
+                            }
+                        }
+                        if count > 0 {
+                            info!("  Channels for guild {}: {} channels", gid, count);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("  Failed to fetch channels for guild {}: {}", gid, e);
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+
+        info!(
+            "Guild data fetch complete. Guilds: {}, Channels: {}",
+            st.guilds.len(),
+            st.channels.iter().count()
+        );
     });
 
     // Auto-select first guild and first text channel

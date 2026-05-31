@@ -174,6 +174,21 @@ async fn connect_and_run(
                             Err(e) => error!("Failed to fetch messages: {}", e),
                         }
                     }
+                    Command::FetchGuildChannels { guild_id } => {
+                        match rest.fetch_guild_channels(guild_id).await {
+                            Ok(channels_data) => {
+                                let mut count = 0;
+                                for cd in &channels_data {
+                                    if let Some(ch) = crate::state::channel::Channel::from_json(cd, guild_id) {
+                                        state.channels.insert(ch.id, ch);
+                                        count += 1;
+                                    }
+                                }
+                                info!("Fetched {} channels for guild {} on demand", count, guild_id);
+                            }
+                            Err(e) => error!("Failed to fetch channels for guild {}: {}", guild_id, e),
+                        }
+                    }
                     Command::VoiceStateUpdate { guild_id, channel_id, self_mute, self_deaf } => {
                         let payload = super::identify::build_voice_state_update(
                             guild_id, channel_id, self_mute, self_deaf,
