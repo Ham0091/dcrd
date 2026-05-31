@@ -115,19 +115,47 @@ async fn handle_insert_mode(
                 // Send as message
                 let channel_id = *state.current_channel_id.read().await;
                 if let Some(cid) = channel_id {
+                    // Local echo — add message to state immediately so it appears in chat
+                    let user_name = state
+                        .user
+                        .try_read()
+                        .ok()
+                        .and_then(|u| u.as_ref().map(|u| u.username.clone()))
+                        .unwrap_or_else(|| "you".to_string());
+                    let user_id = state
+                        .user
+                        .try_read()
+                        .ok()
+                        .and_then(|u| u.as_ref().map(|u| u.id))
+                        .unwrap_or(0);
+                    let echo_msg = crate::state::message::Message {
+                        id: 0, // Will be replaced when Discord echoes it back
+                        channel_id: cid,
+                        author_name: user_name,
+                        author_id: user_id,
+                        content: trimmed.to_string(),
+                        timestamp: String::new(),
+                    };
+                    state.add_message(echo_msg);
+
                     let _ = cmd_tx
                         .send(Command::SendMessage {
                             channel_id: cid,
                             content: trimmed.to_string(),
                         })
                         .await;
+                    app.set_status(format!("✓ Sent: {}", trimmed.chars().take(60).collect::<String>()));
+                    app.scroll_to_bottom();
                 } else {
-                    app.set_status("No channel selected".to_string());
+                    app.set_status("No channel selected — use :ch to switch".to_string());
                 }
             }
         }
-        // Character input
+        // Character input — clear status message on typing
         KeyCode::Char(c) => {
+            if !app.status_message.is_empty() {
+                app.status_message.clear();
+            }
             app.insert_char(c);
         }
         // Backspace

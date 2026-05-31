@@ -8,15 +8,14 @@ use crate::state::AppState;
 /// Render the voice status bar at the bottom of the screen.
 ///
 /// Shows:
-/// - Voice channel name (or "Not connected")
-/// - Connected users
+/// - Status message (from commands) when set, otherwise voice state
 /// - Mute/Deafen status
 /// - Help hint
-pub fn render_voice_bar(area: Rect, state: &AppState, frame: &mut ratatui::Frame) {
+pub fn render_voice_bar(area: Rect, state: &AppState, frame: &mut ratatui::Frame, status_message: &str) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
-        .title(" Voice ")
+        .title(" Status ")
         .title_style(
             Style::default()
                 .fg(Color::Cyan)
@@ -25,6 +24,24 @@ pub fn render_voice_bar(area: Rect, state: &AppState, frame: &mut ratatui::Frame
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+
+    // If there's a status message, show it prominently
+    if !status_message.is_empty() {
+        let style = if status_message.starts_with('✓') || status_message.starts_with("Switched") || status_message.starts_with("Joining") {
+            Style::default().fg(Color::Green)
+        } else if status_message.starts_with("No ") || status_message.starts_with("Unknown") || status_message.starts_with("Channel") {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        let line = Line::from(vec![
+            Span::styled(format!(" {}", status_message), style.add_modifier(Modifier::BOLD)),
+        ]);
+        let paragraph = Paragraph::new(line);
+        frame.render_widget(paragraph, inner);
+        return;
+    }
 
     // We need to read voice state synchronously for rendering.
     // Use try_read to avoid blocking the render thread.

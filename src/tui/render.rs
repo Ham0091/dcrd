@@ -58,7 +58,7 @@ pub fn render(
     render_input_area(chunks[2], app, frame);
 
     // ── Voice status bar ─────────────────────────────────────────────────
-    voice_pane::render_voice_bar(chunks[3], state, frame);
+    voice_pane::render_voice_bar(chunks[3], state, frame, &app.status_message);
 }
 
 /// Render the top title bar showing current server and channel.
