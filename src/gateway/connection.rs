@@ -12,14 +12,17 @@ use crate::state::AppState;
 use crate::Command;
 
 const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
+const MAX_RECONNECT_ATTEMPTS: u32 = 3;
 
 /// Main gateway entry point — reconnects on failure until shutdown.
+/// Stops immediately on authentication failures (close code 4004).
 pub async fn run(
     state: Arc<AppState>,
     mut cmd_rx: mpsc::Receiver<Command>,
     rest: Arc<RestClient>,
     mut shutdown: broadcast::Receiver<()>,
 ) -> anyhow::Result<()> {
+    let mut attempts: u32 = 0;
     loop {
         tokio::select! {
             result = connect_and_run(&state, &mut cmd_rx, &rest) => {
@@ -29,8 +32,20 @@ pub async fn run(
                         return Ok(());
                     }
                     Err(e) => {
-                        warn!("Gateway error: {} — reconnecting in 5s...", e);
-                        sleep(Duration::from_secs(5)).await;
+                        let msg = e.to_string();
+                        // Authentication failures are permanent — don't retry
+                        if msg.contains("4004") {
+                            error!("Authentication failed (4004). Check your DCRD_TOKEN. Aborting.");
+                            return Err(e);
+                        }
+                        attempts += 1;
+                        if attempts >= MAX_RECONNECT_ATTEMPTS {
+                            error!("Failed to connect after {} attempts: {}", attempts, e);
+                            return Err(e);
+                        }
+                        let delay = 5 * attempts; // exponential-ish backoff
+                        warn!("Gateway error: {} — reconnecting in {}s (attempt {}/{})...", e, delay, attempts, MAX_RECONNECT_ATTEMPTS);
+                        sleep(Duration::from_secs(delay as u64)).await;
                     }
                 }
             }
