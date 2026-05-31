@@ -22,14 +22,17 @@ pub async fn run(
     rest: Arc<RestClient>,
     mut shutdown: broadcast::Receiver<()>,
 ) -> anyhow::Result<()> {
-    let mut attempts: u32 = 0;
+    // Track consecutive failures; resets after a successful run.
+    let mut consecutive_failures: u32 = 0;
     loop {
         tokio::select! {
             result = connect_and_run(&state, &mut cmd_rx, &rest) => {
                 match result {
                     Ok(()) => {
-                        info!("Gateway connection closed cleanly");
-                        return Ok(());
+                        info!("Gateway connection closed cleanly — reconnecting");
+                        consecutive_failures = 0;
+                        // Brief pause before reconnecting to avoid tight loops
+                        sleep(Duration::from_secs(2)).await;
                     }
                     Err(e) => {
                         let msg = e.to_string();
@@ -38,13 +41,13 @@ pub async fn run(
                             error!("Authentication failed (4004). Check your DCRD_TOKEN. Aborting.");
                             return Err(e);
                         }
-                        attempts += 1;
-                        if attempts >= MAX_RECONNECT_ATTEMPTS {
-                            error!("Failed to connect after {} attempts: {}", attempts, e);
+                        consecutive_failures += 1;
+                        if consecutive_failures >= MAX_RECONNECT_ATTEMPTS {
+                            error!("Failed to connect after {} consecutive attempts: {}", consecutive_failures, e);
                             return Err(e);
                         }
-                        let delay = 5 * attempts; // exponential-ish backoff
-                        warn!("Gateway error: {} — reconnecting in {}s (attempt {}/{})...", e, delay, attempts, MAX_RECONNECT_ATTEMPTS);
+                        let delay = 5 * consecutive_failures; // 5s, 10s, 15s backoff
+                        warn!("Gateway error: {} — reconnecting in {}s (consecutive failure {}/{})...", e, delay, consecutive_failures, MAX_RECONNECT_ATTEMPTS);
                         sleep(Duration::from_secs(delay as u64)).await;
                     }
                 }
