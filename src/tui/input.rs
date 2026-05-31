@@ -1,4 +1,4 @@
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use crate::state::AppState;
@@ -14,7 +14,11 @@ pub async fn handle_input(
     cmd_tx: &mpsc::Sender<Command>,
 ) {
     match event {
-        Event::Key(key) => handle_key(key, app, state, cmd_tx).await,
+        // On Windows, crossterm 0.28+ generates Press, Release, and Repeat events.
+        // Only handle Press to avoid double-character input on each keystroke.
+        Event::Key(key) if key.kind == KeyEventKind::Press => {
+            handle_key(key, app, state, cmd_tx).await;
+        }
         _ => {}
     }
 }
