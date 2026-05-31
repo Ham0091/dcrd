@@ -44,11 +44,22 @@ pub enum Command {
 /// - Audio threads: capture/playback via cpal on OS threads
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    // Initialize logging
+    // Initialize logging — redirect to file so it doesn't corrupt the TUI.
+    // Log file lives next to the executable.
+    let log_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("dcrd.log")))
+        .unwrap_or_else(|| "dcrd.log".into());
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_target(false)
         .with_thread_ids(false)
+        .with_writer(std::sync::Mutex::new(log_file))
         .init();
 
     tracing::info!("dcrd — Ultra-low-RAM Discord client starting...");
