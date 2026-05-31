@@ -79,6 +79,8 @@ pub struct AppState {
     pub heartbeat_ack_received: AtomicBool,
     /// Users in voice channels — keyed by (guild_id, user_id)
     pub voice_users: DashMap<(u64, u64), String>,
+    /// Cross-task voice status message (written by voice task, read by TUI).
+    pub voice_status: RwLock<String>,
 }
 
 impl AppState {
@@ -96,6 +98,7 @@ impl AppState {
             session_id: RwLock::new(None),
             heartbeat_ack_received: AtomicBool::new(true),
             voice_users: DashMap::new(),
+            voice_status: RwLock::new(String::new()),
         }
     }
 

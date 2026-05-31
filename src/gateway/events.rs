@@ -347,6 +347,15 @@ async fn handle_voice_state_update(data: &Value, state: &Arc<AppState>) -> anyho
             voice.users.clear();
             info!("Voice: disconnected");
         }
+
+        // Update cross-task voice status for the TUI
+        let status = if voice.connected {
+            "Joined voice channel".to_string()
+        } else {
+            String::new()
+        };
+        drop(voice);
+        *state.voice_status.write().await = status;
     }
 
     Ok(())
@@ -401,8 +410,20 @@ async fn handle_voice_server_update(data: &Value, state: &Arc<AppState>) -> anyh
             .unwrap_or(0);
 
         tokio::spawn(async move {
-            if let Err(e) = crate::voice::manager::connect_voice(st, gid, ep, tk, sid, uid).await {
+            let result = crate::voice::manager::connect_voice(st.clone(), gid, ep, tk, sid, uid).await;
+            if let Err(e) = result {
                 error!("Voice connection error: {}", e);
+                // Reset voice state so TUI doesn't show stale "connected"
+                {
+                    let mut voice = st.voice_state.write().await;
+                    voice.connected = false;
+                    voice.channel_id = None;
+                    voice.channel_name = None;
+                    voice.session_id = None;
+                    voice.endpoint = None;
+                    voice.token = None;
+                }
+                *st.voice_status.write().await = format!("Voice failed: {}", e);
             }
         });
     }

@@ -36,6 +36,7 @@ pub async fn connect_voice(
     let voice_url = format!("wss://{}/?v=8", host);
 
     info!("Connecting to Voice Gateway: {}", voice_url);
+    *state.voice_status.write().await = "Connecting to voice gateway…".to_string();
 
     let (ws_stream, _) = connect_async(&voice_url).await?;
     let (mut ws_write, mut ws_read) = ws_stream.split();
@@ -53,6 +54,7 @@ pub async fn connect_voice(
         .and_then(|h| h.as_u64())
         .unwrap_or(41250);
     info!("Voice HELLO: heartbeat_interval={}ms", hb_interval);
+    *state.voice_status.write().await = "Authenticating with voice gateway…".to_string();
 
     // ── Voice IDENTIFY (op 0) ───────────────────────────────────────────
     let identify = json!({
@@ -104,6 +106,7 @@ pub async fn connect_voice(
         "Voice READY: ssrc={}, ip={}, port={}, modes={:?}",
         ssrc, ip, port, modes
     );
+    *state.voice_status.write().await = "Configuring voice connection…".to_string();
 
     // Check if xsalsa20_poly1305 is supported
     let use_mode = if modes.iter().any(|m| m.as_str() == Some("xsalsa20_poly1305")) {
@@ -171,12 +174,27 @@ pub async fn connect_voice(
     let cipher = VoiceCipher::new(&key_bytes);
     info!("SESSION_DESCRIPTION received, encryption key set");
 
+    // Send initial Speaking state (op 5) — required for Discord to register our audio
+    let speaking = json!({
+        "op": 5,
+        "d": {
+            "speaking": 0,
+            "delay": 0,
+            "ssrc": ssrc
+        }
+    });
+    ws_write.send(Message::Text(speaking.to_string())).await?;
+    info!("Speaking state sent (initial: not speaking)");
+
     // Update voice state with connected status
     {
         let mut voice = state.voice_state.write().await;
         voice.connected = true;
         voice.guild_id = Some(guild_id);
     }
+
+    // Update cross-task status message
+    *state.voice_status.write().await = "Voice connected — streaming audio".to_string();
 
     // ── Audio Streaming Loop ────────────────────────────────────────────
     let result = audio_loop(&state, ws_write, ws_read, udp, &cipher, ssrc, hb_interval).await;
@@ -208,12 +226,16 @@ async fn audio_loop<SRead>(
     mut ws_read: SRead,
     mut udp: VoiceUdp,
     cipher: &VoiceCipher,
-    _ssrc: u32,
+    ssrc: u32,
     hb_interval_ms: u64,
 ) -> anyhow::Result<()>
 where
     SRead: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
+    // Notify Discord we're ready to send audio
+    let speaking_on = json!({"op": 5, "d": {"speaking": 1, "delay": 0, "ssrc": ssrc}});
+    ws_write.send(Message::Text(speaking_on.to_string())).await.ok();
+
     // Create Opus encoder/decoder
     let mut encoder = match OpusEncoder::new() {
         Ok(e) => e,
@@ -372,6 +394,10 @@ where
             }
         }
     }
+
+    // Notify Discord we stopped sending audio
+    let speaking_off = json!({"op": 5, "d": {"speaking": 0, "delay": 0, "ssrc": ssrc}});
+    ws_write.send(Message::Text(speaking_off.to_string())).await.ok();
 
     // Signal audio threads to stop, then join them
     stop_flag.store(true, Ordering::Relaxed);

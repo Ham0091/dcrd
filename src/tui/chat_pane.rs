@@ -7,12 +7,18 @@ use std::hash::{Hash, Hasher};
 
 use crate::state::message::Message;
 
+// Theme colors (matching render.rs)
+const BG_DARK: Color = Color::Rgb(32, 34, 37);       // #202225
+const TEXT_NORMAL: Color = Color::Rgb(219, 222, 225); // #dbdee1
+const TEXT_MUTED: Color = Color::Rgb(148, 155, 164);  // #949ba4
+const DIVIDER: Color = Color::Rgb(66, 69, 74);        // #42454a
+
 /// Render the chat message list in the given area.
 ///
 /// Messages are displayed with:
-/// - Timestamps in dim gray
+/// - Timestamps in muted gray (no brackets)
 /// - Usernames in hash-based colors (consistent per user)
-/// - Message text in white
+/// - Message text in light gray
 /// - Scrollable with scroll_offset (0 = show newest at bottom)
 pub fn render_chat(
     area: Rect,
@@ -22,16 +28,31 @@ pub fn render_chat(
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(" Chat ")
-        .title_style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD));
+        .border_style(Style::default().fg(DIVIDER))
+        .style(Style::default().bg(BG_DARK));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     if messages.is_empty() {
-        let empty = Paragraph::new("No messages yet. Type a message below to get started.")
-            .style(Style::default().fg(Color::DarkGray));
+        let empty = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  No messages yet",
+                Style::default()
+                    .fg(TEXT_MUTED)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                "  Type a message below to get started",
+                Style::default().fg(TEXT_MUTED),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  :help  for available commands",
+                Style::default().fg(TEXT_MUTED),
+            )),
+        ]);
         frame.render_widget(empty, inner);
         return;
     }
@@ -54,14 +75,14 @@ pub fn render_chat(
 
             Line::from(vec![
                 Span::styled(
-                    format!("[{}] ", time),
-                    Style::default().fg(Color::DarkGray),
+                    format!("{} ", time),
+                    Style::default().fg(TEXT_MUTED),
                 ),
                 Span::styled(
-                    format!("{}: ", msg.author_name),
+                    format!("{} ", msg.author_name),
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(&msg.content),
+                Span::styled(&msg.content, Style::default().fg(TEXT_NORMAL)),
             ])
         })
         .collect();
