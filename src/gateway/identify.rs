@@ -2,28 +2,51 @@ use serde_json::json;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::debug;
 
-/// Build the IDENTIFY payload (op 2) with minimal intents.
+/// Build the IDENTIFY payload (op 2) for a user account (selfbot).
 ///
-/// Intents 641 = GUILDS (1 << 0) + GUILD_VOICE_STATES (1 << 7) + GUILD_MESSAGES (1 << 9).
-/// We request ONLY the intents we need to minimize gateway traffic.
+/// User accounts use a different IDENTIFY structure than bots:
+/// - No `intents` field (user accounts receive all events)
+/// - `properties` mimics the Discord desktop client
+/// - `presence` sets initial online status
+/// - `capabilities` is a bitmask (4093 = standard Discord desktop capabilities)
 pub fn build_identify(token: &str) -> Message {
     let masked = if token.len() > 10 {
         format!("{}...{}", &token[..6], &token[token.len()-4..])
     } else {
         "***".to_string()
     };
-    debug!("Building IDENTIFY with token prefix: {}", masked);
+    debug!("Building IDENTIFY (user account) with token prefix: {}", masked);
     let payload = json!({
         "op": 2,
         "d": {
             "token": token,
-            "intents": 641,
+            "capabilities": 4093,
             "properties": {
-                "os": "windows",
-                "browser": "dcrd",
-                "device": "dcrd"
+                "os": "Windows",
+                "browser": "Chrome",
+                "device": "",
+                "system_locale": "en-US",
+                "browser_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+                "browser_version": "137.0.0.0",
+                "os_version": "10",
+                "referrer": "",
+                "referring_domain": "",
+                "referrer_current": "",
+                "referring_domain_current": "",
+                "release_channel": "stable",
+                "client_build_number": 411000,
+                "client_event_source": null
             },
-            "compress": false
+            "presence": {
+                "status": "online",
+                "since": 0,
+                "activities": [],
+                "afk": false
+            },
+            "compress": false,
+            "client_state": {
+                "guild_versions": {}
+            }
         }
     });
     Message::Text(payload.to_string())

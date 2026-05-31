@@ -100,6 +100,16 @@ async fn handle_ready(data: &Value, state: &Arc<AppState>) -> anyhow::Result<()>
         }
     }
 
+    // Private channels (DMs) — only present for user accounts, not bots
+    if let Some(private_channels) = data.get("private_channels").and_then(|c| c.as_array()) {
+        for cd in private_channels {
+            if let Some(ch) = Channel::from_json(cd, 0) {
+                info!("  DM: {} (ID: {}, type: {:?})", ch.name, ch.id, ch.channel_type);
+                state.channels.insert(ch.id, ch);
+            }
+        }
+    }
+
     // Guilds (servers)
     if let Some(guilds) = data.get("guilds").and_then(|g| g.as_array()) {
         for gd in guilds {

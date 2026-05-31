@@ -171,6 +171,22 @@ impl AppState {
         })
     }
 
+    /// Get DM channels (type 1 and 3 with guild_id == 0).
+    pub fn get_dm_channels(&self) -> Vec<Channel> {
+        let mut chs: Vec<Channel> = self
+            .channels
+            .iter()
+            .filter(|e| {
+                (e.value().channel_type == ChannelType::Dm
+                    || e.value().channel_type == ChannelType::GroupDm)
+                    && e.value().guild_id == 0
+            })
+            .map(|e| e.value().clone())
+            .collect();
+        chs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        chs
+    }
+
     /// Get voice channel users filtered by guild_id as a sorted list of usernames.
     pub fn get_voice_user_names_for_guild(&self, guild_id: u64) -> Vec<String> {
         let mut names: Vec<String> = self

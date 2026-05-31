@@ -3,7 +3,7 @@ use std::env;
 /// Application configuration loaded from environment variables.
 #[allow(dead_code)]
 pub struct Config {
-    /// Discord bot (or user) token
+    /// Discord user account token
     pub token: String,
     /// Optional default guild ID to select on startup
     pub default_guild_id: Option<u64>,
@@ -15,7 +15,7 @@ impl Config {
     /// Load configuration from environment variables.
     ///
     /// Required:
-    ///   - `DCRD_TOKEN` — Discord bot token
+    ///   - `DCRD_TOKEN` — Discord user account token (extracted from Discord client)
     ///
     /// Optional:
     ///   - `DCRD_GUILD_ID` — default guild to select
@@ -26,7 +26,7 @@ impl Config {
             .map_err(|_| {
                 anyhow::anyhow!(
                     "DCRD_TOKEN environment variable not set.\n\
-                     Set it with: set DCRD_TOKEN=your_bot_token_here"
+                     Set it with: set DCRD_TOKEN=your_user_token_here"
                 )
             })?;
 

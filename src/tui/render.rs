@@ -69,14 +69,26 @@ fn render_title_bar(area: Rect, state: &Arc<AppState>, frame: &mut ratatui::Fram
     let gid = guild_id.as_ref().and_then(|g| **g);
     let cid = channel_id.as_ref().and_then(|c| **c);
 
-    let guild_name = gid
-        .and_then(|id| state.guilds.get(&id))
-        .map(|g| g.name.clone())
-        .unwrap_or_else(|| "No Server".to_string());
+    let is_dm = gid == Some(0);
+    let guild_name = if is_dm {
+        "DMs".to_string()
+    } else {
+        gid.and_then(|id| state.guilds.get(&id))
+            .map(|g| g.name.clone())
+            .unwrap_or_else(|| "No Server".to_string())
+    };
 
     let channel_name = cid
         .and_then(|id| state.channels.get(&id))
-        .map(|c| format!("#{}", c.name))
+        .map(|c| {
+            if c.channel_type == crate::state::channel::ChannelType::Dm
+                || c.channel_type == crate::state::channel::ChannelType::GroupDm
+            {
+                format!("💬 {}", c.name)
+            } else {
+                format!("#{}", c.name)
+            }
+        })
         .unwrap_or_else(|| "#none".to_string());
 
     let user_name = state

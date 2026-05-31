@@ -213,9 +213,13 @@ async fn execute_command(
             handle_srv_command(&parts[1..], app, state, cmd_tx).await;
         }
 
+        ":dm" => {
+            handle_dm_command(&parts[1..], app, state, cmd_tx).await;
+        }
+
         ":help" | ":h" => {
             app.set_status(
-                "Commands: :vc join/leave | :ch #name | :srv name | :quit | Ctrl+M mute | Ctrl+D deafen".to_string(),
+                "Commands: :vc join/leave | :ch #name | :srv name | :dm list/name | :quit | Ctrl+M mute | Ctrl+D deafen".to_string(),
             );
         }
 
@@ -412,5 +416,47 @@ async fn switch_channel_by_offset(
                 channel_id: new_channel.id,
             })
             .await;
+    }
+}
+
+async fn handle_dm_command(
+    args: &[&str],
+    app: &mut TuiApp,
+    state: &Arc<AppState>,
+    cmd_tx: &mpsc::Sender<Command>,
+) {
+    if args.is_empty() || args[0] == "list" {
+        // List DM channels
+        let dms = state.get_dm_channels();
+        if dms.is_empty() {
+            app.set_status("No DM channels found".to_string());
+        } else {
+            let names: Vec<String> = dms.iter().map(|c| c.name.clone()).collect();
+            app.set_status(format!("DMs: {}", names.join(", ")));
+        }
+        return;
+    }
+
+    let name = args.join(" ").to_lowercase();
+
+    // Find DM by recipient name (case-insensitive partial match)
+    let dms = state.get_dm_channels();
+    let found = dms.iter().find(|ch| ch.name.to_lowercase().contains(&name));
+
+    if let Some(ch) = found {
+        // Set current_guild_id to 0 to indicate DM mode
+        *state.current_guild_id.write().await = Some(0);
+        *state.current_channel_id.write().await = Some(ch.id);
+        app.scroll_to_bottom();
+        app.set_status(format!("Switched to DM with {}", ch.name));
+
+        // Fetch recent messages
+        let _ = cmd_tx
+            .send(Command::FetchMessages {
+                channel_id: ch.id,
+            })
+            .await;
+    } else {
+        app.set_status(format!("DM with '{}' not found. Use :dm list to see available DMs.", name));
     }
 }

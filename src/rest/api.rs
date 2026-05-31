@@ -33,7 +33,7 @@ impl RestClient {
         let resp = self
             .client
             .post(&url)
-            .header("Authorization", format!("Bot {}", self.token))
+            .header("Authorization", &self.token)
             .json(&json!({ "content": content }))
             .send()
             .await?;
@@ -68,7 +68,7 @@ impl RestClient {
         let resp = self
             .client
             .get(&url)
-            .header("Authorization", format!("Bot {}", self.token))
+            .header("Authorization", &self.token)
             .send()
             .await?;
 

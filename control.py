@@ -8,13 +8,16 @@ Usage:
     python control.py
 
 Features:
-- Send messages to Discord channels
+- Send messages to Discord channels and DMs
 - Fetch and display recent messages
-- Browse servers, text channels, voice channels
+- Browse servers, text channels, voice channels, and DMs
 - Join voice channels (via gateway)
-- Kill/rebuild/launch the dcrd bot
+- Kill/rebuild/launch the dcrd client
 - Git operations
 - Custom command input
+
+NOTE: Uses a user account token (not a bot token). This is a selfbot and
+violates Discord's Terms of Service — use at your own risk.
 """
 
 import asyncio
@@ -66,10 +69,10 @@ TOKEN_ENV_VAR = "DCRD_TOKEN"
 # ── Discord API helpers ──────────────────────────────────────────────────────
 
 def discord_api(method: str, path: str, token: str, data: dict | None = None) -> dict | list | None:
-    """Make a synchronous Discord REST API call."""
+    """Make a synchronous Discord REST API call (user account auth)."""
     url = f"{API_BASE}{path}"
     headers = {
-        "Authorization": f"Bot {token}",
+        "Authorization": token,
         "User-Agent": "dcrd-control/0.1",
         "Content-Type": "application/json",
     }
@@ -280,7 +283,8 @@ class ControlPanel(App):
                 yield Label("🌐 Discord API")
                 yield Button("🔄 Refresh Servers", id="btn-refresh-guilds")
                 yield Button("📨 Fetch Messages", id="btn-fetch-msgs")
-                yield Button("📋 Bot Info", id="btn-bot-info")
+                yield Button("👤 Account Info", id="btn-bot-info")
+                yield Button("💬 Fetch DMs", id="btn-fetch-dms")
 
                 yield Label("🔧 Tools")
                 yield Button("🧹 Clear View", id="btn-clear", variant="default")
@@ -458,7 +462,11 @@ class ControlPanel(App):
 
     @on(Button.Pressed, "#btn-bot-info")
     def handle_bot_info(self) -> None:
-        self.api_call("Bot Info", "/users/@me")
+        self.api_call("Account Info", "/users/@me")
+
+    @on(Button.Pressed, "#btn-fetch-dms")
+    def handle_fetch_dms(self) -> None:
+        self.fetch_dms()
 
     @on(Button.Pressed, "#btn-clear")
     def handle_clear(self) -> None:
@@ -476,8 +484,12 @@ class ControlPanel(App):
     @on(Select.Changed, "#guild-select")
     def handle_guild_changed(self, event: Select.Changed) -> None:
         if event.value and event.value != Select.BLANK:
-            self.selected_guild_id = int(event.value)
-            self.fetch_channels(self.selected_guild_id)
+            if event.value == "dms":
+                self.selected_guild_id = "dms"
+                self.fetch_dms()
+            else:
+                self.selected_guild_id = int(event.value)
+                self.fetch_channels(self.selected_guild_id)
 
     @on(Select.Changed, "#channel-select")
     def handle_channel_changed(self, event: Select.Changed) -> None:
@@ -672,6 +684,70 @@ class ControlPanel(App):
             self.call_from_thread(setattr, self.query_one("#status-badge", StatusBadge), "status", "idle")
         except Exception as e:
             self.call_from_thread(self.log_write, f"[red]✗[/] {label}: {e}")
+            self.call_from_thread(setattr, self.query_one("#status-badge", StatusBadge), "status", "error")
+
+    @work(thread=True)
+    def fetch_dms(self) -> None:
+        token = os.environ.get(TOKEN_ENV_VAR, "")
+        if not token:
+            self.call_from_thread(self.log_write, "[red]✗[/] No token set.")
+            return
+
+        self.call_from_thread(self.log_write, "[cyan]💬 Fetching DM channels...[/]")
+        self.call_from_thread(setattr, self.query_one("#status-badge", StatusBadge), "status", "api")
+
+        try:
+            data = discord_api("GET", "/users/@me/channels", token)
+            channels = data if isinstance(data, list) else []
+
+            # Add DMs to the channel list as a pseudo-guild
+            dm_items = []
+            for ch in channels:
+                ch_type = ch.get("type", 0)
+                ch_id = ch.get("id")
+                if ch_type == 1:
+                    # DM — use recipient name
+                    recipients = ch.get("recipients", [])
+                    name = recipients[0].get("username", "Unknown") if recipients else "Unknown"
+                    dm_items.append((f"💬 {name}", str(ch_id)))
+                    self.channels.setdefault("dms", []).append(ch)
+                elif ch_type == 3:
+                    # Group DM
+                    name = ch.get("name") or ", ".join(
+                        r.get("username", "?") for r in ch.get("recipients", [])
+                    )
+                    dm_items.append((f"👥 {name}", str(ch_id)))
+                    self.channels.setdefault("dms", []).append(ch)
+
+            # Add DMs as an option in guild select (or update channel select)
+            guild_select = self.query_one("#guild-select", Select)
+            current_options = list(guild_select._options.keys()) if hasattr(guild_select, '_options') else []
+
+            # We'll add DMs as a special guild option
+            from textual.widgets._select import SelectType
+
+            guild_items = [(g["name"], str(g["id"])) for g in self.guilds]
+            guild_items.insert(0, ("💬 Direct Messages", "dms"))
+            self.call_from_thread(guild_select.set_options, guild_items)
+
+            if dm_items:
+                self.call_from_thread(
+                    self.query_one("#channel-select", Select).set_options, dm_items
+                )
+                self.selected_guild_id = "dms"
+                self.call_from_thread(
+                    self.log_write,
+                    f"[green]✓[/] Found {len(dm_items)} DM channel(s)",
+                )
+            else:
+                self.call_from_thread(
+                    self.log_write,
+                    "[yellow]⚠[/] No DM channels found",
+                )
+
+            self.call_from_thread(setattr, self.query_one("#status-badge", StatusBadge), "status", "idle")
+        except Exception as e:
+            self.call_from_thread(self.log_write, f"[red]✗[/] Fetch DMs: {e}")
             self.call_from_thread(setattr, self.query_one("#status-badge", StatusBadge), "status", "error")
 
     # ── Helpers ──────────────────────────────────────────────────────────
